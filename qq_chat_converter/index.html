@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>聊天记录查看器</title>
+  <style>
+    /* 现在所有颜色都使用 CSS 变量。
+      这些变量的值将由下面的 JavaScript CONFIG 对象动态设置。
+    */
+    :root {
+      --page-background: #f4f4f4;
+      --toolbar-background: #3a96f1;
+      --toolbar-text-color: white;
+      --button-background: #F5F5F5;
+      --button-text-color: #333;
+      --button-hover-background: #e6e6e6;
+      --button-disabled-background: #ccc;
+      --message-background: white;
+      --message-highlight-color: #fff9c4;
+      --sender-text-color: #1976d2;
+      --time-text-color: #555;
+      --date-separator-color: #888;
+      --search-result-hover-bg: #f0f0f0;
+      --forwarded-message-bg: #e9f5ff;
+    }
+
+    body {
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: var(--page-background);
+    }
+    .toolbar {
+      background: var(--toolbar-background);
+      color: var(--toolbar-text-color);
+      padding: 10px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    .toolbar input, .toolbar select, .toolbar button {
+      padding: 8px;
+      border-radius: 4px;
+      border: none;
+      font-size: 14px;
+    }
+    .toolbar button {
+      cursor: pointer;
+      background: var(--button-background);
+      color: var(--button-text-color);
+      transition: background 0.3s;
+    }
+    .toolbar button:hover {
+      background: var(--button-hover-background);
+    }
+    .toolbar button:disabled {
+      background: var(--button-disabled-background);
+      cursor: not-allowed;
+    }
+    .chat-container {
+      padding: 10px;
+      max-width: 800px;
+      margin: auto;
+    }
+    .message {
+      background: var(--message-background);
+      margin: 8px 0;
+      padding: 12px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      transition: background-color 0.5s;
+    }
+    .message.highlight {
+      background-color: var(--message-highlight-color);
+      animation: highlight-fade 2s ease-in-out forwards;
+    }
+    @keyframes highlight-fade {
+      from { background-color: var(--message-highlight-color); }
+      to { background-color: var(--message-background); }
+    }
+    .sender {
+      font-weight: bold;
+      color: var(--sender-text-color);
+    }
+    .time {
+      font-size: 12px;
+      color: var(--time-text-color);
+    }
+    .text {
+      margin-top: 5px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .image {
+      margin-top: 8px;
+      max-width: 200px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .date-separator {
+      text-align: center;
+      margin: 20px 0;
+      color: var(--date-separator-color);
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .search-result-item {
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+    }
+    .search-result-item:hover {
+      background: var(--search-result-hover-bg);
+    }
+    .forwarded-message {
+        margin-left: 20px;
+        background: var(--forwarded-message-bg) !important;
+    }
+
+    /* 添加图片放大查看的样式 */
+    .image-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+    }
+
+    .image-modal img {
+      max-width: 90%;
+      max-height: 90%;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+    }
+
+    .image-modal-close {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 24px;
+      color: white;
+      cursor: pointer;
+      background: rgba(0, 0, 0, 0.5);
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .image-modal-close:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span id="searchLabel"></span>
+  <input type="text" id="searchInput" placeholder="输入关键词...">
+  
+  <span id="dateFilterLabel"></span>
+  <button id="prevDayBtn" disabled></button>
+  <select id="dateFilter">
+    <option id="dateFilterAllOption" value=""></option>
+  </select>
+  <button id="nextDayBtn" disabled></button>
+  
+  <button id="resetButton"></button>
+</div>
+
+<div class="chat-container" id="chatContainer">
+  </div>
+
+<!-- 图片放大查看的模态框 -->
+<div id="imageModal" class="image-modal">
+  <button class="image-modal-close" onclick="closeImageModal()">×</button>
+  <img id="modalImage" src="" alt="放大图片">
+</div>
+
+<script>
+// ==================================================================
+// ✅ 配置区 (所有自定义内容都在这里)
+// ==================================================================
+const CONFIG = {
+  // 1. 路径配置
+  paths: {
+    jsonFile: "qq_chat.json",
+    imageFolder: "Image" // 如果JSON中的图片路径已包含文件夹名，则留空
+  },
+
+  // 2. 颜色配置 (CSS颜色值)
+  colors: {
+    pageBackground: '#f4f4f4',
+    toolbarBackground: "#3a96f1",
+    toolbarTextColor: 'white',
+    buttonBackground: '#F5F5F5',
+    buttonTextColor: '#333',
+    buttonHoverBackground: '#e6e6e6',
+    buttonDisabledBackground: '#ccc',
+    messageBackground: 'white',
+    messageHighlightColor: '#fff9c4', // 点击搜索结果跳转后的高亮色
+    senderTextColor: '#0d47a1',   // 发送者昵称颜色
+    timeTextColor: '#555',
+    dateSeparatorColor: '#888',
+    searchResultHoverBg: '#f0f0f0', // 搜索结果鼠标悬停背景色
+    forwardedMessageBg: '#e9f5ff' // 转发消息的背景色
+  },
+
+  // 3. 文本配置
+  text: {
+    pageTitle: '聊天记录查看器',
+    loading: '加载中...',
+    noResults: '没有找到符合条件的消息。',
+    searchLabel: '🔍 搜索:',
+    searchInputPlaceholder: '输入关键词...',
+    dateFilterLabel: '📆 日期筛选:',
+    dateFilterAllOption: '所有日期',
+    prevDayButton: '< 前一天',
+    nextDayButton: '后一天 >',
+    resetButton: '重置视图',
+    unknownSender: '未知',
+    forwardedMessagePrefix: '↪' // 转发消息前的符号
+  }
+};
+// ==================================================================
+
+
+// 全局变量
+let allChatData = [];
+let availableDates = [];
+let currentDateIndex = -1;
+
+// DOM 元素引用
+const searchInput = document.getElementById("searchInput");
+const dateFilter = document.getElementById("dateFilter");
+const prevDayBtn = document.getElementById("prevDayBtn");
+const nextDayBtn = document.getElementById("nextDayBtn");
+const chatContainer = document.getElementById("chatContainer");
+
+// 0. 页面加载时应用所有配置并获取数据
+window.onload = () => {
+  applyConfigurations();
+  fetchData();
+};
+
+// 应用配置到页面
+function applyConfigurations() {
+  // 应用颜色配置
+  const rootStyle = document.documentElement.style;
+  for (const key in CONFIG.colors) {
+    // 将JS的驼峰命名 (e.g., pageBackground) 转换为 CSS的串式命名 (e.g., --page-background)
+    const cssVarName = '--' + key.replace(/([A-Z])/g, "-$1").toLowerCase();
+    rootStyle.setProperty(cssVarName, CONFIG.colors[key]);
+  }
+
+  // 应用文本配置
+  document.title = CONFIG.text.pageTitle;
+  document.getElementById('searchLabel').textContent = CONFIG.text.searchLabel;
+  searchInput.placeholder = CONFIG.text.searchInputPlaceholder;
+  document.getElementById('dateFilterLabel').textContent = CONFIG.text.dateFilterLabel;
+  document.getElementById('dateFilterAllOption').textContent = CONFIG.text.dateFilterAllOption;
+  prevDayBtn.innerHTML = CONFIG.text.prevDayButton;
+  nextDayBtn.innerHTML = CONFIG.text.nextDayButton;
+  document.getElementById('resetButton').textContent = CONFIG.text.resetButton;
+  chatContainer.textContent = CONFIG.text.loading;
+}
+
+// 1. 数据加载和初始化
+function fetchData() {
+  fetch(CONFIG.paths.jsonFile)
+    .then(res => {
+      if (!res.ok) throw new Error(`无法加载 JSON: ${res.statusText}`);
+      return res.json();
+    })
+    .then(data => {
+      const messages = Array.isArray(data) ? data : (data.messages || []);
+      allChatData = messages.map((msg, index) => ({ ...msg, originalId: index }));
+      
+      const dateSet = new Set(allChatData.map(msg => msg.date).filter(Boolean));
+      availableDates = Array.from(dateSet).sort();
+      
+      populateDateFilter();
+      renderMessages(allChatData);
+      setupEventListeners();
+    })
+    .catch(error => {
+      chatContainer.innerHTML = `<p style="color: red;">错误: ${error.message}</p>`;
+    });
+}
+
+// 2. 渲染函数
+function renderMessages(messages, options = {}) {
+  chatContainer.innerHTML = "";
+  if (!messages.length) {
+    chatContainer.innerHTML = `<p>${CONFIG.text.noResults}</p>`;
+    return;
+  }
+  if (options.isSearchResult) {
+    renderSearchResults(messages);
+  } else {
+    let lastDate = null;
+    messages.forEach(msg => {
+      if (msg.date && msg.date !== lastDate) {
+        const dateDiv = document.createElement("div");
+        dateDiv.className = "date-separator";
+        dateDiv.textContent = msg.date;
+        chatContainer.appendChild(dateDiv);
+        lastDate = msg.date;
+      }
+      chatContainer.appendChild(createMessageElement(msg));
+    });
+  }
+  setupImageClickListeners(); // 重新绑定图片点击事件
+}
+
+function renderSearchResults(messages) {
+  chatContainer.innerHTML = "";
+  messages.forEach(msg => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'search-result-item';
+    wrapper.dataset.jumpToId = msg.originalId;
+    wrapper.onclick = handleSearchResultClick;
+    wrapper.appendChild(createMessageElement(msg, { isSearchResult: true }));
+    chatContainer.appendChild(wrapper);
+  });
+  setupImageClickListeners(); // 重新绑定图片点击事件
+}
+
+function createMessageElement(msg, options = {}) {
+    const div = document.createElement("div");
+    div.className = "message";
+    div.dataset.id = msg.originalId;
+
+    const images = msg.images || (msg.image ? [msg.image] : []);
+    let imgHtml = images.map(img => `<img class="image" src="${normalizePath(img)}" alt="聊天图片" />`).join("");
+    
+    const timeDisplay = options.isSearchResult ? `${msg.date || ''} ${msg.time || ''}` : msg.time || '';
+
+    div.innerHTML = `
+      <div class="sender">${msg.sender || CONFIG.text.unknownSender}</div>
+      <div class="time">${timeDisplay}</div>
+      <div class="text">${msg.text || ""}</div>
+      ${imgHtml}
+    `;
+
+    if (msg.forwarded && Array.isArray(msg.forwarded)) {
+      const fwdContainer = document.createElement('div');
+      msg.forwarded.forEach(fwd => {
+        const fdiv = createMessageElement(fwd);
+        fdiv.classList.add("forwarded-message"); // 使用特定class
+        const senderDiv = fdiv.querySelector('.sender');
+        if(senderDiv) senderDiv.innerHTML = `${CONFIG.text.forwardedMessagePrefix} ${fwd.sender || CONFIG.text.unknownSender}`;
+        fwdContainer.appendChild(fdiv);
+      });
+      div.appendChild(fwdContainer);
+    }
+    return div;
+}
+
+// 3. 事件处理与逻辑
+function setupEventListeners() {
+  searchInput.addEventListener("input", handleSearch);
+  dateFilter.addEventListener("change", handleDateFilterChange);
+  prevDayBtn.addEventListener("click", navigateToPrevDay);
+  nextDayBtn.addEventListener("click", navigateToNextDay);
+  document.getElementById('resetButton').addEventListener('click', resetFilter);
+}
+
+function handleSearch(e) {
+  const keyword = e.target.value.trim().toLowerCase();
+  dateFilter.value = "";
+  updateNavButtons();
+  if (!keyword) {
+    renderMessages(allChatData);
+    return;
+  }
+  const filtered = allChatData.filter(msg =>
+    (msg.text && msg.text.toLowerCase().includes(keyword)) ||
+    (msg.sender && msg.sender.toLowerCase().includes(keyword))
+  );
+  renderMessages(filtered, { isSearchResult: true });
+}
+
+function handleSearchResultClick(event) {
+    const jumpToId = parseInt(event.currentTarget.dataset.jumpToId, 10);
+    const targetMessage = allChatData.find(m => m.originalId === jumpToId);
+    if (targetMessage) {
+        searchInput.value = "";
+        dateFilter.value = targetMessage.date;
+        handleDateFilterChange();
+        setTimeout(() => {
+            const messageElement = document.querySelector(`.message[data-id='${jumpToId}']`);
+            if (messageElement) {
+                messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                messageElement.classList.add('highlight');
+                setTimeout(() => messageElement.classList.remove('highlight'), 2000);
+            }
+        }, 100);
+    }
+}
+
+function handleDateFilterChange() {
+  const selectedDate = dateFilter.value;
+  searchInput.value = "";
+  if (!selectedDate) {
+    currentDateIndex = -1;
+    renderMessages(allChatData);
+  } else {
+    currentDateIndex = availableDates.indexOf(selectedDate);
+    renderMessages(allChatData.filter(msg => msg.date === selectedDate));
+  }
+  updateNavButtons();
+}
+
+function navigateToPrevDay() {
+  if (currentDateIndex > 0) {
+    currentDateIndex--;
+    dateFilter.value = availableDates[currentDateIndex];
+    handleDateFilterChange();
+  }
+}
+
+function navigateToNextDay() {
+  if (currentDateIndex < availableDates.length - 1) {
+    currentDateIndex++;
+    dateFilter.value = availableDates[currentDateIndex];
+    handleDateFilterChange();
+  }
+}
+
+function updateNavButtons() {
+  prevDayBtn.disabled = currentDateIndex <= 0;
+  nextDayBtn.disabled = currentDateIndex === -1 || currentDateIndex >= availableDates.length - 1;
+}
+
+function resetFilter() {
+  searchInput.value = "";
+  dateFilter.value = "";
+  currentDateIndex = -1;
+  renderMessages(allChatData);
+  updateNavButtons();
+  window.scrollTo(0, 0);
+}
+
+// 4. 辅助函数
+function populateDateFilter() {
+  availableDates.forEach(date => {
+    const option = document.createElement("option");
+    option.value = date;
+    option.textContent = date;
+    dateFilter.appendChild(option);
+  });
+}
+
+function normalizePath(path) {
+  if (!path) return "";
+  if (CONFIG.paths.imageFolder && !path.startsWith('http') && !path.startsWith('/')) {
+      return `${CONFIG.paths.imageFolder}/${path.replace(/\\/g, "/")}`;
+  }
+  return path.replace(/\\/g, "/");
+}
+
+// 添加图片点击放大功能
+function setupImageClickListeners() {
+  const images = document.querySelectorAll('.image');
+  images.forEach(img => {
+    img.addEventListener('click', () => {
+      const modal = document.getElementById('imageModal');
+      const modalImage = document.getElementById('modalImage');
+      modalImage.src = img.src;
+      modal.style.display = 'flex';
+    });
+  });
+}
+
+function closeImageModal() {
+  const modal = document.getElementById('imageModal');
+  modal.style.display = 'none';
+}
+
+// 添加点击空白区域关闭模态框的功能
+document.getElementById('imageModal').addEventListener('click', (event) => {
+  // 如果点击的目标是模态框本身（而不是图片或关闭按钮），则关闭模态框
+  if (event.target.id === 'imageModal') {
+    closeImageModal();
+  }
+});
+
+// 修改 renderMessages 和 renderSearchResults，确保每次渲染后重新绑定图片点击事件
+function renderMessages(messages, options = {}) {
+  chatContainer.innerHTML = "";
+  if (!messages.length) {
+    chatContainer.innerHTML = `<p>${CONFIG.text.noResults}</p>`;
+    return;
+  }
+  if (options.isSearchResult) {
+    renderSearchResults(messages);
+  } else {
+    let lastDate = null;
+    messages.forEach(msg => {
+      if (msg.date && msg.date !== lastDate) {
+        const dateDiv = document.createElement("div");
+        dateDiv.className = "date-separator";
+        dateDiv.textContent = msg.date;
+        chatContainer.appendChild(dateDiv);
+        lastDate = msg.date;
+      }
+      chatContainer.appendChild(createMessageElement(msg));
+    });
+  }
+  setupImageClickListeners(); // 重新绑定图片点击事件
+}
+
+function renderSearchResults(messages) {
+  chatContainer.innerHTML = "";
+  messages.forEach(msg => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'search-result-item';
+    wrapper.dataset.jumpToId = msg.originalId;
+    wrapper.onclick = handleSearchResultClick;
+    wrapper.appendChild(createMessageElement(msg, { isSearchResult: true }));
+    chatContainer.appendChild(wrapper);
+  });
+  setupImageClickListeners(); // 重新绑定图片点击事件
+}
+</script>
+
+</body>
+</html>
